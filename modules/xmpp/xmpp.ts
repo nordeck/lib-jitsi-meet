@@ -1,5 +1,6 @@
 import { safeJsonParse } from '@jitsi/js-utils/json';
 import { getLogger } from '@jitsi/logger';
+import { JwtPayload, jwtDecode } from 'jwt-decode';
 import { cloneDeep, unescape } from 'lodash-es';
 import { $msg, Strophe } from 'strophe.js';
 
@@ -365,6 +366,23 @@ export default class XMPP extends Listenable {
                     undefined,
                     undefined,
                     details);
+            }
+        });
+
+        this.connection.on(XmppConnection.Events.CONN_STATUS_CHANGED, status => {
+            if (status === XmppConnection.Status.RESUMING) {
+                // we will be resuming in a bit let's check the token (if any) for expiration
+                if (this.token) {
+                    const payload = jwtDecode<JwtPayload>(this.token);
+
+                    if (new Date().getTime() >= payload.exp * 1000) {
+                        // we want to cancel the scheduled resume as the token is expired
+                        this.connection.cancelResume();
+
+                        // notify that a new token is needed and passed via refreshToken of the connection
+                        this.eventEmitter.emit(JitsiConnectionEvents.CONNECTION_TOKEN_EXPIRED);
+                    }
+                }
             }
         });
 
@@ -1333,5 +1351,19 @@ export default class XMPP extends Listenable {
         }
 
         return false;
+    }
+
+    /**
+     * This method allows renewal of the tokens if they are expiring.
+     * @param token - The new token.
+     */
+    refreshToken(token: string): Promise<void> {
+        this.token = token;
+
+        let serviceUrl = this.options.serviceUrl;
+
+        serviceUrl += `${serviceUrl.indexOf('?') === -1 ? '?' : '&'}token=${token}`;
+
+        return this.connection.refreshToken(serviceUrl);
     }
 }
